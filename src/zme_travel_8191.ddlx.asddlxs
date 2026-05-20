@@ -1,0 +1,57 @@
+@Metadata.layer: #CORE
+@UI: { headerInfo: { typeName: 'Travel', 
+                     typeNamePlural: 'Travels',
+                     title: { type: #STANDARD,
+                              value: 'TravelID' } },
+        presentationVariant: [{ sortOrder: [{ by: 'TravelID',
+                                              direction: #DESC }],
+                                visualizations: [{ type: #AS_LINEITEM }] }] }
+annotate entity ZTRAVEL_C_8191
+    with 
+{
+@UI.facet: [{ id: 'Travel',
+              purpose: #STANDARD,
+              type: #IDENTIFICATION_REFERENCE,
+              label: 'Travel',
+              position: 10 },
+              
+              { id: 'Booking',
+                purpose: #STANDARD,
+                type: #LINEITEM_REFERENCE,
+                position: 20,
+                targetElement: '_Booking' }]
+
+    @UI.hidden: true
+    TravelUUID;
+    
+    @UI: { lineItem: [{ position: 10,
+                        importance: #HIGH },
+                        
+                      { position: 10,
+                        importance: #HIGH,
+                        type: #FOR_ACTION,
+                        dataAction: 'acceptTravel',
+                        label: 'Accept Travel' },
+                        
+                        
+                        { position: 20,
+                          importance: #HIGH,
+                          type: #FOR_ACTION,
+                          dataAction: 'rejectTravel' },
+                        
+                        { position: 30,
+                          importance: #HIGH,
+                          type: #FOR_ACTION,
+                          dataAction: 'deductDiscount',
+                          label: 'Discount',
+                          invocationGrouping: #CHANGE_SET } ],
+                          
+           selectionField: [{ position: 10 }],
+           identification: [{ position: 10, label: 'TravelID' },
+                            { type: #FOR_ACTION,
+                              dataAction: 'accept Travel',
+                              position: 10 }] }
+    TravelID;
+    
+    
+}

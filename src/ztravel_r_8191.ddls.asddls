@@ -1,7 +1,17 @@
 @AccessControl.authorizationCheck: #NOT_REQUIRED
 @EndUserText.label: 'Travel - Root entity'
 @Metadata.ignorePropagatedAnnotations: true
-define root view entity ZTRAVEL_R_8191 as select from ztravel_8191_ac
+define root view entity ZTRAVEL_R_8191 
+as select from ztravel_8191_ac
+
+composition [0..*] of zbooking_r_8191 as _Booking
+
+association [0..1] to /DMO/I_Agency             as _Agency on $projection.AgencyID = _Agency.AgencyID
+association [0..1] to /DMO/I_Customer           as _Customer on $projection.CustomerID = _Customer.CustomerID
+association [1..1] to /DMO/I_Overall_Status_VH  as _OverallStatus on $projection.OverallStatus = _OverallStatus.OverallStatus
+association [0..1] to I_Currency                as _Currency on $projection.CurrencyCode = _Currency.Currency
+
+
 //composition of target_data_source_name as _association_name
 {
 key travel_uuid as TravelUUID,
@@ -32,7 +42,13 @@ local_last_changed_at as LocalLastChangedAt,
 
 // Total ETag Field
 @Semantics.systemDateTime.lastChangedAt: true
-last_changed_at as LastChangedAt
+last_changed_at as LastChangedAt,
+
+_Booking,
+_Agency,
+_Customer,
+_OverallStatus,
+_Currency
     
 //    _association_name // Make association public
 }
