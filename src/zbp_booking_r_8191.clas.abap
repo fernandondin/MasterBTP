@@ -1,15 +1,5 @@
-class ZBP_BOOKING_R_8191 definition
-  public
-  abstract
-  final
-  create public .
-
-public section.
-protected section.
-private section.
+CLASS zbp_booking_r_8191 DEFINITION PUBLIC ABSTRACT FINAL FOR BEHAVIOR OF ztravel_r_8191.
 ENDCLASS.
 
-
-
-CLASS ZBP_BOOKING_R_8191 IMPLEMENTATION.
+CLASS zbp_booking_r_8191 IMPLEMENTATION.
 ENDCLASS.

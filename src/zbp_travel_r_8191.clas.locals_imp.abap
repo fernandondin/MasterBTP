@@ -139,17 +139,17 @@ CLASS lhc_Travel IMPLEMENTATION.
 
       ENDIF.
       "SetResult
-      APPEND VALUE #( let upd_auth = cond #( when update_granted = abap_true
-                                             then if_abap_behv=>auth-allowed
-                                             else if_abap_behv=>auth-unauthorized )
-                          del_auth = cond #( when delete_granted = abap_true
-                                             then if_abap_behv=>auth-allowed
-                                             else if_abap_behv=>auth-unauthorized )
-                          in
+      APPEND VALUE #( LET upd_auth = COND #( WHEN update_granted = abap_true
+                                             THEN if_abap_behv=>auth-allowed
+                                             ELSE if_abap_behv=>auth-unauthorized )
+                          del_auth = COND #( WHEN delete_granted = abap_true
+                                             THEN if_abap_behv=>auth-allowed
+                                             ELSE if_abap_behv=>auth-unauthorized )
+                          IN
                           %tky = travel-%tky
                           %update = upd_auth
                           %action-edit = upd_auth
-                          %delete = del_auth ) to result.
+                          %delete = del_auth ) TO result.
     ENDLOOP.
 
 
@@ -217,9 +217,130 @@ CLASS lhc_Travel IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD deductDiscount.
+
+    data travels_for_update TYPE TABLE FOR UPDATE ztravel_r_8191.
+    DATA(keys_discount) = keys.
+
+    LOOP AT keys_discount ASSIGNING FIELD-SYMBOL(<key_discount>)
+                          WHERE %param-discount is initial or
+                                %param-discount > 100 or
+                                %param-discount <= 0.
+
+        APPEND VALUE #( %tky = <key_discount>-%tky ) to failed-travel.
+
+        APPEND VALUE #( %tky = <key_discount>-%tky
+                        %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>discount_invalid
+                                                            severity = if_abap_behv_message=>severity-error )
+                        %element-BookingFee = if_abap_behv=>mk-on
+                        %op-%action-deductDiscount = if_abap_behv=>mk-on ) TO reported-travel.
+
+
+    endloop.
+
+    CHECK failed-travel is initial.
+    READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+    ENTITY Travel
+    FIELDS ( BookingFee )
+    WITH CORRESPONDING #( keys_discount )
+    RESULT DATA(travels).
+
+    DATA percentage TYPE decfloat16.
+    LOOP AT travels ASSIGNING FIELD-SYMBOL(<travel>).
+        DATA(discount_percent) = keys_discount[ key id %tky = <travel>-%tky ]-%param-discount.
+        percentage = discount_percent / 100.
+        data(reduce_fee) = <travel>-BookingFee * ( 1 - percentage ).
+        APPEND VALUE #( %tky = <travel>-%tky
+                        bookingfee = reduce_fee ) to travels_for_update.
+    ENDLOOP.
+
+    MODIFY ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+    ENTITY Travel
+    UPDATE
+    FIELDS ( BookingFee )
+    WITH travels_for_update.
+
+    READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+    ENTITY Travel
+    ALL FIELDS WITH
+    CORRESPONDING #( keys )
+    RESULT DATA(travels_discount).
+
+    result = VALUE #( FOR travel IN travels_discount ( %tky = travel-%tky
+                                                       %param = travel ) ).
+
   ENDMETHOD.
 
   METHOD reCalcTotalPrice.
+
+    TYPES: BEGIN OF ty_amount_per_curr,
+            amount TYPE /dmo/total_price,
+            currency_code TYPE /dmo/currency_code,
+           END OF ty_amount_per_curr.
+
+DATA: amount_per_curr TYPE STANDARD TABLE OF ty_amount_per_curr.
+
+READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+    ENTITY Travel
+    FIELDS ( BookingFee CurrencyCode )
+    WITH CORRESPONDING #( keys )
+    RESULT DATA(travels).
+
+    DELETE travels where CurrencyCode Is INITIAL.
+
+    LOOP AT travels ASSIGNING FIELD-SYMBOL(<travel>).
+
+        amount_per_curr = VALUE #( ( amount = <travel>-BookingFee
+                                   currency_code = <travel>-CurrencyCode ) ).
+        "Read Bookings
+         READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+        ENTITY Travel by \_Booking
+        FIELDS ( FlightPrice CurrencyCode )
+        WITH Value #( ( %tky = <travel>-%tky ) )
+        RESULT DATA(bookings).
+
+        LOOP AT bookings into DATA(booking) WHERE CurrencyCode is not initial.
+            COLLECT VALUE ty_amount_per_curr( amount = booking-FlightPrice
+                                              currency_code = booking-CurrencyCode ) into amount_per_curr.
+        ENDLOOP.
+
+        "Read Bookings supplements
+         READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+        ENTITY Booking by \_BookingSupplement
+        FIELDS ( Price CurrencyCode )
+        WITH Value #( for r_booking in bookings ( %tky = r_booking-%tky ) )
+        RESULT DATA(bookingSupplements).
+
+        LOOP AT bookingsupplements into DATA(bookingSupplement) WHERE CurrencyCode is not initial.
+            COLLECT VALUE ty_amount_per_curr( amount = bookingsupplement-Price                                              currency_code = bookingsupplement-CurrencyCode ) into amount_per_curr.
+        ENDLOOP.
+
+        clear: <travel>-TotalPrice.
+        LOOP AT amount_per_curr into DATA(single_amt_per_curr).
+            "Currency Conversion
+            if single_amt_per_curr-currency_code = <travel>-CurrencyCode.
+                <travel>-TotalPrice += single_amt_per_curr-amount.
+                else.
+                    /dmo/cl_flight_amdp=>convert_currency(
+                        EXPORTING
+                            iv_amount  = single_amt_per_curr-amount
+                            iv_currency_code_source = single_amt_per_curr-currency_code
+                            iv_currency_code_target = <travel>-CurrencyCode
+                            iv_exchange_rate_date = cl_abap_context_info=>get_system_date(  )
+                        IMPORTING
+                            ev_amount = DATA(total_booking_price_per_curr)
+                     ).
+                      <travel>-TotalPrice += total_booking_price_per_curr.
+            ENDIF.
+        ENDLOOP.
+
+        "Write back the modified total price
+        MODIFY ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+        ENTITY Travel
+        UPDATE
+        FIELDS ( TotalPrice )
+        WITH CORRESPONDING #( travels ).
+
+    ENDLOOP.
 
 
 
@@ -309,6 +430,51 @@ CLASS lhc_Travel IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD validateCustomer.
+
+    DATA customers TYPE SORTED TABLE OF /dmo/customer WITH UNIQUE KEY client customer_id.
+    "EML
+    READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+    ENTITY Travel
+    FIELDS ( CustomerID )
+    WITH CORRESPONDING #( keys )
+    RESULT DATA(travels).
+
+    customers = CORRESPONDING #( travels
+                                 DISCARDING DUPLICATES MAPPING
+                                 customer_id = CustomerID
+                                 EXCEPT * ).
+    DELETE customers WHERE customer_id IS INITIAL.
+    IF customers IS NOT INITIAL.
+      SELECT FROM /dmo/customer AS db
+          INNER JOIN @customers AS it
+          ON db~customer_id = it~customer_id
+          FIELDS db~customer_id
+          INTO TABLE @DATA(valid_customers).
+
+    ENDIF.
+
+    LOOP AT travels INTO DATA(travel).
+      APPEND VALUE #( %tky = travel-%tky
+                      %state_area = 'VALIDATE_CUSTOMER' ) TO reported-travel.
+      IF travel-CustomerID IS INITIAL.
+        APPEND VALUE #( %tky = travel-%tky ) to failed-travel.
+
+        APPEND VALUE #( %tky = travel-%tky
+                        %state_area = 'VALIDATE_CUSTOMER'
+                        %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>enter_customer_id
+                                                            severity = if_abap_behv_message=>severity-error )
+                        %element-CustomerID = if_abap_behv=>mk-on ) TO reported-travel.
+        ELSEIF not line_exists( valid_customers[ customer_id = travel-CustomerID ] ).
+            APPEND VALUE #( %tky = travel-%tky
+                        %state_area = 'VALIDATE_CUSTOMER'
+                        %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>customer_unkown
+                                                            customer_id = travel-CustomerID
+                                                            severity = if_abap_behv_message=>severity-error )
+                        %element-CustomerID = if_abap_behv=>mk-on ) TO reported-travel.
+      ENDIF.
+    ENDLOOP.
+
+
   ENDMETHOD.
 
   METHOD validateDates.
