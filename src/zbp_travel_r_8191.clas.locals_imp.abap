@@ -2,11 +2,11 @@ CLASS lhc_Travel DEFINITION INHERITING FROM cl_abap_behavior_handler.
   PRIVATE SECTION.
 
     CONSTANTS:
-        BEGIN OF travel_status,
-        open     TYPE C LENGTH 1 VALUE 'O', "Open
-        accepted TYPE C LENGTH 1 VALUE 'A', "Accepted
-        rejected TYPE C LENGTH 1 VALUE 'X', "Rejected
-        END OF TRAVEL_STATUS.
+      BEGIN OF travel_status,
+        open     TYPE c LENGTH 1 VALUE 'O', "Open
+        accepted TYPE c LENGTH 1 VALUE 'A', "Accepted
+        rejected TYPE c LENGTH 1 VALUE 'X', "Rejected
+      END OF travel_status.
 
     METHODS get_instance_features FOR INSTANCE FEATURES
       IMPORTING keys REQUEST requested_features FOR Travel RESULT result.
@@ -62,25 +62,25 @@ CLASS lhc_Travel IMPLEMENTATION.
     WITH CORRESPONDING #( keys )
     RESULT DATA(travels).
 
-    result = VALUE #( for travel in travels ( %tky = travel-%tky
+    result = VALUE #( FOR travel IN travels ( %tky = travel-%tky
                                               %field-BookingFee =
-                                              cond #( when travel-OverallStatus = travel_status-accepted
+                                              COND #( WHEN travel-OverallStatus = travel_status-accepted
                                                       THEN if_abap_behv=>fc-f-read_only
-                                                      else if_abap_behv=>fc-f-unrestricted )
+                                                      ELSE if_abap_behv=>fc-f-unrestricted )
                                               %action-acceptTravel =
-                                              cond #( when travel-OverallStatus = travel_status-accepted
+                                              COND #( WHEN travel-OverallStatus = travel_status-accepted
                                                       THEN if_abap_behv=>fc-o-disabled
                                                       ELSE if_abap_behv=>fc-o-enabled )
                                               %action-rejectTravel =
-                                              cond #( when travel-OverallStatus = travel_status-rejected
+                                              COND #( WHEN travel-OverallStatus = travel_status-rejected
                                                       THEN if_abap_behv=>fc-o-disabled
                                                       ELSE if_abap_behv=>fc-o-enabled )
                                               %action-deductDiscount =
-                                              cond #( when travel-OverallStatus = travel_status-accepted
+                                              COND #( WHEN travel-OverallStatus = travel_status-accepted
                                                       THEN if_abap_behv=>fc-o-disabled
                                                       ELSE if_abap_behv=>fc-o-enabled )
                                               %assoc-_Booking =
-                                              cond #( when travel-OverallStatus = travel_status-rejected
+                                              COND #( WHEN travel-OverallStatus = travel_status-rejected
                                                       THEN if_abap_behv=>fc-o-disabled
                                                       ELSE if_abap_behv=>fc-o-enabled )
                                                ) ).
@@ -89,47 +89,109 @@ CLASS lhc_Travel IMPLEMENTATION.
 
   METHOD get_instance_authorizations.
 
+    DATA: update_requested TYPE abap_bool,
+          update_granted   TYPE abap_bool,
+          delete_granted   TYPE abap_bool,
+          delete_requested TYPE abap_bool.
+
+    READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+    ENTITY Travel
+    FIELDS ( AgencyID )
+    WITH CORRESPONDING #( keys )
+    RESULT DATA(travels).
+
+    update_requested = COND #( WHEN requested_authorizations-%update = if_abap_behv=>mk-on
+                                OR requested_authorizations-%action-Edit = if_abap_behv=>mk-on
+                                THEN abap_true
+                                ELSE abap_false ).
+
+    delete_requested = COND #( WHEN requested_authorizations-%delete = if_abap_behv=>mk-on
+                                THEN abap_true
+                                ELSE abap_false ).
+
+    DATA(lv_technical_name) = cl_abap_context_info=>get_user_technical_name(  ).
+
+    LOOP AT travels INTO DATA(travel).
+      "Update
+      IF update_requested = abap_true.
+        IF lv_technical_name = 'CB99880008191' AND travel-AgencyID NE '70014'.
+          update_granted = abap_true.
+        ELSE.
+          update_granted = abap_false.
+          APPEND VALUE #( %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>not_authorized_for_agencyid
+                                                      agency_id = travel-AgencyID
+                                                      severity = if_abap_behv_message=>severity-error )
+                  %global = if_abap_behv=>mk-on ) TO reported-travel.
+        ENDIF.
+
+      ENDIF.
+      "Delete
+      IF delete_requested = abap_true.
+        IF lv_technical_name = 'CB99880008191' AND travel-AgencyID NE '70014'.
+          delete_granted = abap_true.
+        ELSE.
+          delete_granted = abap_false.
+          APPEND VALUE #( %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>not_authorized_for_agencyid
+                          agency_id = travel-AgencyID
+                          severity = if_abap_behv_message=>severity-error )
+                          %global = if_abap_behv=>mk-on ) TO reported-travel.
+        ENDIF.
+
+      ENDIF.
+      "SetResult
+      APPEND VALUE #( let upd_auth = cond #( when update_granted = abap_true
+                                             then if_abap_behv=>auth-allowed
+                                             else if_abap_behv=>auth-unauthorized )
+                          del_auth = cond #( when delete_granted = abap_true
+                                             then if_abap_behv=>auth-allowed
+                                             else if_abap_behv=>auth-unauthorized )
+                          in
+                          %tky = travel-%tky
+                          %update = upd_auth
+                          %action-edit = upd_auth
+                          %delete = del_auth ) to result.
+    ENDLOOP.
 
 
   ENDMETHOD.
 
   METHOD get_global_authorizations.
-    data(lv_technical_name) = cl_abap_context_info=>get_user_technical_name(  ).
+    DATA(lv_technical_name) = cl_abap_context_info=>get_user_technical_name(  ).
 *Create
-    if requested_authorizations-%create eq if_abap_behv=>mk-on.
-        if lv_technical_name = 'CB99880008191'.
-            result-%create = if_abap_behv=>auth-allowed.
-            else.
-            result-%create = if_abap_behv=>auth-unauthorized.
-            APPEND VALUE #( %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>not_authorized
-                                                                severity = if_abap_behv_message=>severity-error )
-                            %global = if_abap_behv=>mk-on ) to reported-travel.
-        endif.
+    IF requested_authorizations-%create EQ if_abap_behv=>mk-on.
+      IF lv_technical_name = 'CB99880008191'.
+        result-%create = if_abap_behv=>auth-allowed.
+      ELSE.
+        result-%create = if_abap_behv=>auth-unauthorized.
+        APPEND VALUE #( %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>not_authorized
+                                                            severity = if_abap_behv_message=>severity-error )
+                        %global = if_abap_behv=>mk-on ) TO reported-travel.
+      ENDIF.
     ENDIF.
-"Delete
-    if requested_authorizations-%delete eq if_abap_behv=>mk-on.
-        if lv_technical_name = 'CB99880008191'.
-            result-%delete = if_abap_behv=>auth-allowed.
-            else.
-            result-%delete = if_abap_behv=>auth-unauthorized.
-            APPEND VALUE #( %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>not_authorized
-                                                                severity = if_abap_behv_message=>severity-error )
-                            %global = if_abap_behv=>mk-on ) to reported-travel.
-        endif.
+    "Delete
+    IF requested_authorizations-%delete EQ if_abap_behv=>mk-on.
+      IF lv_technical_name = 'CB99880008191'.
+        result-%delete = if_abap_behv=>auth-allowed.
+      ELSE.
+        result-%delete = if_abap_behv=>auth-unauthorized.
+        APPEND VALUE #( %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>not_authorized
+                                                            severity = if_abap_behv_message=>severity-error )
+                        %global = if_abap_behv=>mk-on ) TO reported-travel.
+      ENDIF.
     ENDIF.
-"Update
-    if requested_authorizations-%update eq if_abap_behv=>mk-on or
+    "Update
+    IF requested_authorizations-%update EQ if_abap_behv=>mk-on OR
        requested_authorizations-%action-Edit EQ if_abap_behv=>mk-on.
-        if lv_technical_name = 'CB99880008191'.
-            result-%update = if_abap_behv=>auth-allowed.
-            result-%action-Edit = if_abap_behv=>auth-allowed.
-            else.
-            result-%update = if_abap_behv=>auth-unauthorized.
-            result-%action-Edit = if_abap_behv=>auth-unauthorized.
-            APPEND VALUE #( %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>not_authorized
-                                                                severity = if_abap_behv_message=>severity-error )
-                            %global = if_abap_behv=>mk-on ) to reported-travel.
-        endif.
+      IF lv_technical_name = 'CB99880008191'.
+        result-%update = if_abap_behv=>auth-allowed.
+        result-%action-Edit = if_abap_behv=>auth-allowed.
+      ELSE.
+        result-%update = if_abap_behv=>auth-unauthorized.
+        result-%action-Edit = if_abap_behv=>auth-unauthorized.
+        APPEND VALUE #( %msg = NEW /dmo/cm_flight_messages( textid = /dmo/cm_flight_messages=>not_authorized
+                                                            severity = if_abap_behv_message=>severity-error )
+                        %global = if_abap_behv=>mk-on ) TO reported-travel.
+      ENDIF.
     ENDIF.
   ENDMETHOD.
 
@@ -140,16 +202,16 @@ CLASS lhc_Travel IMPLEMENTATION.
     ENTITY Travel
     UPDATE
     FIELDS ( OverallStatus )
-    WITH VALUE #( for key in keys ( %tky = key-%tky
+    WITH VALUE #( FOR key IN keys ( %tky = key-%tky
                                     OverallStatus = travel_status-accepted ) ).
 
-    READ ENTITIES OF ztravel_r_8191 in LOCAL MODE
+    READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
     ENTITY Travel
     ALL FIELDS WITH
     CORRESPONDING #( keys )
     RESULT DATA(travels).
 
-    result = VALUE #( for travel in travels ( %tky = travel-%tky
+    result = VALUE #( FOR travel IN travels ( %tky = travel-%tky
                                               %param = travel ) ).
 
   ENDMETHOD.
@@ -169,16 +231,16 @@ CLASS lhc_Travel IMPLEMENTATION.
     ENTITY Travel
     UPDATE
     FIELDS ( OverallStatus )
-    WITH VALUE #( for key in keys ( %tky = key-%tky
+    WITH VALUE #( FOR key IN keys ( %tky = key-%tky
                                     OverallStatus = travel_status-rejected ) ).
 
-    READ ENTITIES OF ztravel_r_8191 in LOCAL MODE
+    READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
     ENTITY Travel
     ALL FIELDS WITH
     CORRESPONDING #( keys )
     RESULT DATA(travels).
 
-    result = VALUE #( for travel in travels ( %tky = travel-%tky
+    result = VALUE #( FOR travel IN travels ( %tky = travel-%tky
                                               %param = travel ) ).
   ENDMETHOD.
 
@@ -197,49 +259,49 @@ CLASS lhc_Travel IMPLEMENTATION.
   METHOD setStatusToOpen.
 
     "EML
-    READ ENTITIES OF ztravel_r_8191 in LOCAL MODE
-    entity Travel
+    READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+    ENTITY Travel
     FIELDS ( OverallStatus )
-    with CORRESPONDING #( keys )
+    WITH CORRESPONDING #( keys )
     RESULT DATA(travels).
 
-    delete travels WHERE OverallStatus is not INITIAL.
+    DELETE travels WHERE OverallStatus IS NOT INITIAL.
 
-    check travels is not INITIAL.
+    CHECK travels IS NOT INITIAL.
 
-   "EML
-   MODIFY ENTITIES OF ztravel_r_8191 IN LOCAL MODE
-   ENTITY Travel
-   UPDATE
-   FIELDS ( OverallStatus )
-   WITH VALUE #( for travel in travels ( %tky = travel-%tky
-                                         OverallStatus = travel-OverallStatus ) ).
+    "EML
+    MODIFY ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+    ENTITY Travel
+    UPDATE
+    FIELDS ( OverallStatus )
+    WITH VALUE #( FOR travel IN travels ( %tky = travel-%tky
+                                          OverallStatus = travel-OverallStatus ) ).
 
   ENDMETHOD.
 
   METHOD setTravelNumber.
 
     "EML
-    READ ENTITIES OF ztravel_r_8191 in LOCAL MODE
-    entity Travel
+    READ ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+    ENTITY Travel
     FIELDS ( TravelID )
-    with CORRESPONDING #( keys )
+    WITH CORRESPONDING #( keys )
     RESULT DATA(travels).
 
-    delete travels WHERE TravelID is not initial.
-    check travels is not initial.
+    DELETE travels WHERE TravelID IS NOT INITIAL.
+    CHECK travels IS NOT INITIAL.
 
-    select single from ztravel_8191_ac
-    FIELDS max( travel_id )
-    into @DATA(max_TravelID).
+    SELECT SINGLE FROM ztravel_8191_ac
+    FIELDS MAX( travel_id )
+    INTO @DATA(max_TravelID).
 
     "EML
-     MODIFY ENTITIES OF ztravel_r_8191 IN LOCAL MODE
-       ENTITY Travel
-       UPDATE
-       FIELDS ( TravelID )
-       WITH VALUE #( for travel in travels INDEX INTO i ( %tky = travel-%tky
-                                                          TravelID = max_TravelID + i ) ).
+    MODIFY ENTITIES OF ztravel_r_8191 IN LOCAL MODE
+      ENTITY Travel
+      UPDATE
+      FIELDS ( TravelID )
+      WITH VALUE #( FOR travel IN travels INDEX INTO i ( %tky = travel-%tky
+                                                         TravelID = max_TravelID + i ) ).
 
   ENDMETHOD.
 
